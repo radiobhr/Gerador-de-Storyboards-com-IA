@@ -9,6 +9,7 @@ import StoryboardDisplay from './components/StoryboardDisplay';
 import Loading from './components/Loading';
 import IntroScreen from './components/IntroScreen';
 import SearchResults from './components/SearchResults';
+import { MultiplexLanding } from './components/MultiplexLanding';
 import { 
   Clapperboard, Upload, FileText, AudioLines, Table, ScrollText, 
   AlertCircle, History, Sparkles, Key, Sun, Moon, ExternalLink, 
@@ -16,7 +17,8 @@ import {
 } from 'lucide-react';
 
 const App: React.FC = () => {
-  const [showIntro, setShowIntro] = useState(true);
+  const [showIntro, setShowIntro] = useState(false); // Default false to land instantly on 1.png home screen style
+  const [activePage, setActivePage] = useState<'landing' | 'creator'>('landing');
   const [topic, setTopic] = useState('');
   const [storyboardType, setStoryboardType] = useState<StoryboardType>('Curto');
   const [visualStyle, setVisualStyle] = useState<VisualStyle>('Default');
@@ -293,10 +295,22 @@ const App: React.FC = () => {
 
   return (
     <>
-    {!checkingKey && !hasApiKey && <KeySelectionModal />}
+    {!checkingKey && !hasApiKey && activePage === 'creator' && <KeySelectionModal />}
 
     {showIntro ? (
       <IntroScreen onComplete={() => setShowIntro(false)} />
+    ) : activePage === 'landing' ? (
+      <MultiplexLanding
+        selectedLlm={selectedLlm}
+        onSelectLlm={setSelectedLlm}
+        onNavigate={setActivePage}
+        onSelectKey={() => {
+          setActivePage('creator');
+          handleSelectKey();
+        }}
+        hasApiKey={hasApiKey}
+        storyboardsCount={storyboards.length}
+      />
     ) : (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans pb-20 relative overflow-x-hidden animate-in fade-in duration-1000 transition-colors">
       
@@ -312,11 +326,12 @@ const App: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 md:h-20 flex items-center justify-between">
           <div 
             onClick={() => {
+              setActivePage('landing');
               setActiveStoryboardId(null);
               setTopic('');
             }}
             className="flex items-center gap-3 md:gap-4 cursor-pointer hover:opacity-90 select-none"
-            title="Ir para a Tela Inicial / Nova Criação"
+            title="Voltar ao Multiplex Inicial"
           >
             <div className="bg-gradient-to-br from-cyan-500 to-blue-600 p-2.5 rounded-xl border border-cyan-400/20 text-white shadow-md relative overflow-hidden">
                <Film className="w-5 h-5 animate-pulse" />
@@ -330,6 +345,14 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setActivePage('landing')}
+                className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white border border-white/5 font-semibold text-xs transition-colors uppercase tracking-widest font-mono"
+                title="Voltar para a Vitrine de Modelos (Página 1)"
+              >
+                Voltar ao Catálogo
+              </button>
+
               <button 
                 onClick={handleSelectKey}
                 className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2.5 rounded-xl bg-slate-950 text-white font-semibold tracking-wide transition-all border border-cyan-500/50 hover:border-cyan-400 hover:shadow-[0_0_15px_rgba(6,182,212,0.4)] shadow-md group relative overflow-hidden text-xs md:text-sm"
