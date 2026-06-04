@@ -1,0 +1,8 @@
+{
+  "name": "Gerador de Storyboards com IA",
+  "description": "Uma plataforma online inteligente capaz de criar storyboards completos (longos ou curtos), integrando arquivos de roteiro, áudio, tabelas ou texto, com ilustrações cinemáticas automáticas baseadas em inteligência artificial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
