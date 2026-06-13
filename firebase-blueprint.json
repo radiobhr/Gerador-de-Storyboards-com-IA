@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "storyboard": {
+      "title": "Storyboard",
+      "description": "A film or video storyboard representation with multiple scenes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the storyboard" },
+        "userId": { "type": "string", "description": "The Firebase User UID who owns this storyboard" },
+        "title": { "type": "string", "description": "Title of the story or concept" },
+        "concept": { "type": "string", "description": "Original concept or uploaded draft summary used as input" },
+        "type": { "type": "string", "description": "The length type of the storyboard (Curto/Longo)" },
+        "style": { "type": "string", "description": "Selected visual style (e.g., Default, Cartoon, Sketch)" },
+        "language": { "type": "string", "description": "Language of dialogue, actions, and scene details" },
+        "timestamp": { "type": "number", "description": "Epic milestone creation timestamp in milliseconds" },
+        "videoUrl": { "type": "string", "description": "Optional AI-generated background music or sound trail url" }
+      },
+      "required": ["id", "userId", "title", "concept", "type", "style", "language", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/storyboards/{storyboardId}": {
+      "schema": "storyboard",
+      "description": "Table storing all movie, game, or video storyboards created by various users."
+    }
+  }
+}

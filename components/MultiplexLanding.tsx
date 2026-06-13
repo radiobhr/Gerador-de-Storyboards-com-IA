@@ -5,7 +5,8 @@
 import React, { useRef, useState } from 'react';
 import { 
   ChevronLeft, ChevronRight, Sparkles, Key, Film, 
-  Settings, Play, PlayCircle, Star, ArrowRight, ShieldCheck, Gamepad2, Info
+  Settings, Play, PlayCircle, Star, ArrowRight, ShieldCheck, Gamepad2, Info,
+  LogOut, Cloud
 } from 'lucide-react';
 
 interface MultiplexLandingProps {
@@ -15,6 +16,10 @@ interface MultiplexLandingProps {
   onSelectKey: () => void;
   hasApiKey: boolean;
   storyboardsCount: number;
+  googleUser: any;
+  isLoggingIn: boolean;
+  onGoogleLogin: () => void;
+  onGoogleLogout: () => void;
 }
 
 export const MultiplexLanding: React.FC<MultiplexLandingProps> = ({
@@ -23,7 +28,11 @@ export const MultiplexLanding: React.FC<MultiplexLandingProps> = ({
   onNavigate,
   onSelectKey,
   hasApiKey,
-  storyboardsCount
+  storyboardsCount,
+  googleUser,
+  isLoggingIn,
+  onGoogleLogin,
+  onGoogleLogout
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollPosition, setScrollPosition] = useState(0);
@@ -147,7 +156,38 @@ export const MultiplexLanding: React.FC<MultiplexLandingProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
+            {/* Google Drive Status Button/Profile */}
+            {googleUser ? (
+              <div className="flex items-center gap-2 bg-slate-900/90 border border-cyan-500/30 pl-2 pr-3 py-1.5 rounded-xl">
+                {googleUser.photoURL ? (
+                  <img src={googleUser.photoURL} alt={googleUser.displayName || 'Google'} className="w-6 h-6 rounded-lg pointer-events-none" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-6 h-6 bg-cyan-700 rounded-lg flex items-center justify-center font-bold text-[10px]">{(googleUser.displayName || 'G')[0]}</div>
+                )}
+                <div className="flex flex-col text-left">
+                  <span className="text-[10px] font-bold text-slate-200 leading-none block truncate max-w-[90px]">{googleUser.displayName}</span>
+                  <span className="text-[8px] font-mono text-cyan-400 leading-none mt-0.5">@ Google Drive</span>
+                </div>
+                <button 
+                  onClick={onGoogleLogout} 
+                  className="ml-1 p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-red-400 transition-colors"
+                  title="Desconectar do Google"
+                >
+                  <LogOut className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={onGoogleLogin}
+                disabled={isLoggingIn}
+                className="px-4 py-2 bg-slate-900/90 border border-white/10 hover:border-cyan-400/50 hover:bg-slate-800 disabled:opacity-50 text-slate-200 text-xs font-semibold rounded-xl tracking-wide transition-all flex items-center gap-2 shadow-lg"
+              >
+                <Cloud className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{isLoggingIn ? 'Conectando...' : 'Conectar Google Drive'}</span>
+              </button>
+            )}
+
             {/* Status Beacon based on API key state like Image 2 */}
             <div className="hidden md:flex items-center gap-2 bg-slate-900/80 border border-white/10 px-3 py-1.5 rounded-xl">
               <span className="relative flex h-1.5 w-1.5">

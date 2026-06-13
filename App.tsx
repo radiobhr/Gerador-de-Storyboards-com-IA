@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Storyboard, StoryboardType, VisualStyle, Language, UploadedFile } from './types';
 import { generateStoryboardOutline } from './services/geminiService';
 import StoryboardDisplay from './components/StoryboardDisplay';
@@ -13,8 +14,16 @@ import { MultiplexLanding } from './components/MultiplexLanding';
 import { 
   Clapperboard, Upload, FileText, AudioLines, Table, ScrollText, 
   AlertCircle, History, Sparkles, Key, Sun, Moon, ExternalLink, 
-  Trash2, Globe, Palette, Film, CheckCircle2, DollarSign, CreditCard
+  Trash2, Globe, Palette, Film, CheckCircle2, DollarSign, CreditCard,
+  Cloud, LogOut
 } from 'lucide-react';
+import { initAuth, googleSignIn, logout } from './services/googleDriveService';
+import { 
+  saveStoryboardToFirestore, 
+  getUserStoryboardsFromFirestore, 
+  deleteStoryboardFromFirestore, 
+  testConnection 
+} from './services/databaseService';
 
 const App: React.FC = () => {
   const [showIntro, setShowIntro] = useState(false); // Default false to land instantly on 1.png home screen style
@@ -44,6 +53,133 @@ const App: React.FC = () => {
   // API Key State
   const [hasApiKey, setHasApiKey] = useState(false);
   const [checkingKey, setCheckingKey] = useState(true);
+
+  // Google Drive & Authentication states
+  const [googleUser, setGoogleUser] = useState<any | null>(null);
+  const [googleToken, setGoogleToken] = useState<string | null>(null);
+  const [isLoggingInGoogle, setIsLoggingInGoogle] = useState(false);
+  const [hasSyncedFirestore, setHasSyncedFirestore] = useState(false);
+
+  // Validate Firestore connectivity on bootstrap to respect the skill guidelines
+  useEffect(() => {
+    testConnection();
+  }, []);
+
+  // Initialize Google Auth listener
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        setGoogleUser(user);
+        setGoogleToken(token);
+      },
+      () => {
+        setGoogleUser(null);
+        setGoogleToken(null);
+        setHasSyncedFirestore(false);
+      }
+    );
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // Synchronize localStorage and Firestore on Auth State changes
+  useEffect(() => {
+    const syncFirestore = async () => {
+      if (!googleUser) {
+        setHasSyncedFirestore(false);
+        return;
+      }
+      if (hasSyncedFirestore) return;
+
+      try {
+        // Load user's storyboards from Firestore
+        const firestoreList = await getUserStoryboardsFromFirestore(googleUser.uid);
+        
+        // Load outstanding local storyboards from localStorage
+        const saved = localStorage.getItem('storyboards');
+        let localList: Storyboard[] = [];
+        if (saved) {
+          try {
+            localList = JSON.parse(saved);
+          } catch (e) {
+            console.error("Local parsing error:", e);
+          }
+        }
+
+        // Find items that only exist in local storage and not yet in Firestore
+        const dbIds = new Set(firestoreList.map(item => item.id));
+        const localOnly = localList.filter(item => !dbIds.has(item.id));
+
+        // Sync localOnly items to Firestore
+        for (const localItem of localOnly) {
+          await saveStoryboardToFirestore(localItem, googleUser.uid);
+        }
+
+        // Merge and sort overall list desc by timestamp
+        const finalMerged = [...localOnly, ...firestoreList];
+        finalMerged.sort((a, b) => b.timestamp - a.timestamp);
+
+        setStoryboards(finalMerged);
+        localStorage.setItem('storyboards', JSON.stringify(finalMerged));
+        setHasSyncedFirestore(true);
+
+        if (finalMerged.length > 0) {
+          setActiveStoryboardId(prev => (prev && finalMerged.find(i => i.id === prev) ? prev : finalMerged[0].id));
+        }
+      } catch (err) {
+        console.error("Sincronização de storyboards do Firebase falhou:", err);
+      }
+    };
+
+    syncFirestore();
+  }, [googleUser, hasSyncedFirestore]);
+
+  const handleGoogleLogin = async () => {
+    setIsLoggingInGoogle(true);
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setGoogleUser(result.user);
+        setGoogleToken(result.accessToken);
+        setHasSyncedFirestore(false);
+      }
+    } catch (err) {
+      console.error('Google sign-in error:', err);
+    } finally {
+      setIsLoggingInGoogle(false);
+    }
+  };
+
+  const handleGoogleLogout = async () => {
+    try {
+      await logout();
+      setGoogleUser(null);
+      setGoogleToken(null);
+      setHasSyncedFirestore(false);
+      // Reload native local storyboards from localStorage so they don't see another user's synced storyboards
+      const saved = localStorage.getItem('storyboards');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setStoryboards(parsed);
+          if (parsed.length > 0) {
+            setActiveStoryboardId(parsed[0].id);
+          } else {
+            setActiveStoryboardId(null);
+          }
+        } catch (e) {
+          setStoryboards([]);
+          setActiveStoryboardId(null);
+        }
+      } else {
+        setStoryboards([]);
+        setActiveStoryboardId(null);
+      }
+    } catch (err) {
+      console.error('Google logout error:', err);
+    }
+  };
 
   // Load and apply dark mode
   useEffect(() => {
@@ -202,6 +338,15 @@ const App: React.FC = () => {
       saveStoryboards(updatedStoryboards);
       setActiveStoryboardId(newStoryboard.id);
 
+      // Save to Cloud Firestore if signed in
+      if (googleUser) {
+        try {
+          await saveStoryboardToFirestore(newStoryboard, googleUser.uid);
+        } catch (dbErr) {
+          console.error("Falha ao salvar no Firestore pós criação:", dbErr);
+        }
+      }
+
       setLoadingStep(3);
       setLoadingMessage("Storyboard estruturado com sucesso!");
     } catch (err: any) {
@@ -219,9 +364,35 @@ const App: React.FC = () => {
   };
 
   // Update a single storyboard (e.g. after adding artwork)
-  const handleUpdateStoryboard = (updated: Storyboard) => {
+  const handleUpdateStoryboard = async (updated: Storyboard) => {
     const list = storyboards.map(sb => sb.id === updated.id ? updated : sb);
     saveStoryboards(list);
+
+    if (googleUser) {
+      try {
+        await saveStoryboardToFirestore(updated, googleUser.uid);
+      } catch (dbErr) {
+        console.error("Falha ao salvar atualização do storyboard no Firestore:", dbErr);
+      }
+    }
+  };
+
+  // Delete a specific storyboard from history and Cloud Firestore
+  const handleDeleteStoryboard = async (id: string) => {
+    const filtered = storyboards.filter(sb => sb.id !== id);
+    saveStoryboards(filtered);
+
+    if (activeStoryboardId === id) {
+      setActiveStoryboardId(filtered.length > 0 ? filtered[0].id : null);
+    }
+
+    if (googleUser) {
+      try {
+        await deleteStoryboardFromFirestore(id);
+      } catch (dbErr) {
+        console.error("Falha ao deletar o storyboard do Firestore:", dbErr);
+      }
+    }
   };
 
   const activeStoryboard = storyboards.find(sb => sb.id === activeStoryboardId);
@@ -310,6 +481,10 @@ const App: React.FC = () => {
         }}
         hasApiKey={hasApiKey}
         storyboardsCount={storyboards.length}
+        googleUser={googleUser}
+        isLoggingIn={isLoggingInGoogle}
+        onGoogleLogin={handleGoogleLogin}
+        onGoogleLogout={handleGoogleLogout}
       />
     ) : (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans pb-20 relative overflow-x-hidden animate-in fade-in duration-1000 transition-colors">
@@ -734,13 +909,26 @@ const App: React.FC = () => {
 
         {/* Active Board Display Component */}
         {activeStoryboard && !isLoading && (
-            <div className="space-y-6">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeStoryboard.id}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="space-y-6"
+            >
               <StoryboardDisplay 
                 storyboard={activeStoryboard} 
                 onUpdateStoryboard={handleUpdateStoryboard}
+                googleUser={googleUser}
+                googleToken={googleToken}
+                isLoggingInGoogle={isLoggingInGoogle}
+                onGoogleLogin={handleGoogleLogin}
               />
               <SearchResults results={currentSearchResults} />
-            </div>
+            </motion.div>
+          </AnimatePresence>
         )}
 
         {/* History panel and session archives */}
@@ -785,9 +973,22 @@ const App: React.FC = () => {
                             
                             <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
                                 <div>
-                                  <h4 className="font-display font-bold text-slate-800 dark:text-slate-100 text-sm line-clamp-1 group-hover:text-cyan-500 transition-colors">
-                                    {sb.title}
-                                  </h4>
+                                  <div className="flex items-center justify-between gap-2">
+                                    <h4 className="font-display font-bold text-slate-800 dark:text-slate-100 text-sm line-clamp-1 group-hover:text-cyan-500 transition-colors flex-1">
+                                      {sb.title}
+                                    </h4>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteStoryboard(sb.id);
+                                      }}
+                                      className="p-1 px-1.5 rounded-lg bg-slate-50 hover:bg-red-500/15 dark:bg-slate-800/40 dark:hover:bg-red-500/20 text-slate-400 hover:text-red-500 border border-slate-200/40 dark:border-white/5 transition-colors duration-200 flex-shrink-0 animate-in fade-in zoom-in"
+                                      title="Excluir Storyboard"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                   <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 mt-1 leading-normal font-light">
                                     {sb.concept}
                                   </p>

@@ -7,17 +7,30 @@ import { Storyboard, StoryboardScene, VisualStyle } from '../types';
 import { 
   Download, Sparkles, Camera, Film, MessageSquare, 
   Maximize2, X, ZoomIn, ZoomOut, RefreshCw, 
-  Clapperboard, FileText, Check, Loader2, ArrowRight
+  Clapperboard, FileText, Check, Loader2, ArrowRight,
+  Cloud
 } from 'lucide-react';
 import { generateStoryboardFrame, editStoryboardFrame } from '../services/geminiService';
 import { TrailerModal } from './TrailerModal';
+import { getOrCreateFolder, uploadScriptToDrive, uploadHtmlReportToDrive } from '../services/googleDriveService';
 
 interface StoryboardDisplayProps {
   storyboard: Storyboard;
   onUpdateStoryboard: (updated: Storyboard) => void;
+  googleUser: any;
+  googleToken: string | null;
+  isLoggingInGoogle: boolean;
+  onGoogleLogin: () => void;
 }
 
-const StoryboardDisplay: React.FC<StoryboardDisplayProps> = ({ storyboard, onUpdateStoryboard }) => {
+const StoryboardDisplay: React.FC<StoryboardDisplayProps> = ({ 
+  storyboard, 
+  onUpdateStoryboard,
+  googleUser,
+  googleToken,
+  isLoggingInGoogle,
+  onGoogleLogin
+}) => {
   const [fullscreenImage, setFullscreenImage] = useState<{ src: string; alt: string } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [showTrailer, setShowTrailer] = useState(false);
@@ -28,6 +41,14 @@ const StoryboardDisplay: React.FC<StoryboardDisplayProps> = ({ storyboard, onUpd
   const [editPrompts, setEditPrompts] = useState<{ [key: number]: string }>({});
   const [activeEditPanel, setActiveEditPanel] = useState<number | null>(null);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+
+  // Google Drive Upload states
+  const [showDriveOptions, setShowDriveOptions] = useState(false);
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+  const [driveSuccessMsg, setDriveSuccessMsg] = useState<string | null>(null);
+  const [driveErrorMsg, setDriveErrorMsg] = useState<string | null>(null);
+  const [driveFileUrl, setDriveFileUrl] = useState<string | null>(null);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
 
   const handleZoomIn = () => setZoomLevel(prev => Math.min(prev + 0.5, 4));
   const handleZoomOut = () => setZoomLevel(prev => Math.max(prev - 0.5, 0.5));
@@ -149,6 +170,296 @@ const StoryboardDisplay: React.FC<StoryboardDisplayProps> = ({ storyboard, onUpd
     URL.revokeObjectURL(url);
   };
 
+  // Export entire illustrated storyboard with scenes and descriptions to an organized PDF
+  const handleExportPDF = async () => {
+    if (isExportingPDF) return;
+    setIsExportingPDF(true);
+
+    try {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pageHeight = 297;
+      const pageWidth = 210;
+      const marginX = 15;
+      const contentWidth = pageWidth - (marginX * 2); // 180mm
+      let currentY = 20;
+
+      // Header function for additional pages
+      const addPageHeader = (pageNum: number) => {
+        doc.setFont('Helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184); // slate-400
+        doc.text(`Storyboard: ${storyboard.title}`, marginX, 10);
+        doc.text(`Página ${pageNum}`, pageWidth - marginX, 10, { align: 'right' });
+        doc.setDrawColor(226, 232, 240); // slate-200
+        doc.setLineWidth(0.2);
+        doc.line(marginX, 12, pageWidth - marginX, 12);
+      };
+
+      const ensureSpace = (neededHeight: number) => {
+        if (currentY + neededHeight > pageHeight - 20) {
+          doc.addPage();
+          currentY = 20;
+          addPageHeader(doc.getNumberOfPages());
+        }
+      };
+
+      // --- PAGE 1: TITLE & COVER INFO ---
+      // Style accent top bar
+      doc.setFillColor(8, 145, 178); // cyan-600
+      doc.rect(0, 0, pageWidth, 5, 'F');
+
+      // Title
+      doc.setFont('Helvetica', 'bold');
+      doc.setFontSize(24);
+      doc.setTextColor(15, 23, 42); // slate-900
+      const titleLines = doc.splitTextToSize(storyboard.title, contentWidth);
+      ensureSpace(titleLines.length * 8 + 5);
+      titleLines.forEach((line: string) => {
+        doc.text(line, marginX, currentY);
+        currentY += 8;
+      });
+      currentY += 3;
+
+      // Badges (Type and Style)
+      ensureSpace(12);
+      doc.setFillColor(241, 245, 249); // slate-100
+      doc.rect(marginX, currentY, 48, 6, 'F');
+      doc.rect(marginX + 53, currentY, 48, 6, 'F');
+      
+      doc.setFont('Helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105); // slate-600
+      doc.text(`FORMATO: Storyboard ${storyboard.type}`, marginX + 3, currentY + 4);
+      doc.text(`ESTILO VISUAL: ${storyboard.style}`, marginX + 56, currentY + 4);
+      
+      currentY += 12;
+
+      // Concept box
+      ensureSpace(15);
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.setLineWidth(0.3);
+      
+      const conceptHeader = "CONCEITO ORIGINAL:";
+      const conceptBodyLines = doc.splitTextToSize(storyboard.concept, contentWidth - 10);
+      const boxHeight = 12 + conceptBodyLines.length * 5;
+      
+      ensureSpace(boxHeight + 5);
+      doc.rect(marginX, currentY, contentWidth, boxHeight, 'FD');
+      
+      // Concept label
+      doc.setFont('Helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(8, 145, 178); // cyan-600
+      doc.text(conceptHeader, marginX + 5, currentY + 6);
+      
+      // Concept text
+      doc.setFont('Helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(51, 65, 85); // slate-700
+      let textY = currentY + 11;
+      conceptBodyLines.forEach((line: string) => {
+        doc.text(line, marginX + 5, textY);
+        textY += 5;
+      });
+      
+      currentY += boxHeight + 10;
+
+      // --- SCENES LIST ---
+      doc.setFont('Helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(15, 23, 42); // slate-900
+      ensureSpace(10);
+      doc.text("ROTEIRO & QUADROS ILUSTRADOS", marginX, currentY);
+      currentY += 8;
+
+      for (const scene of storyboard.scenes) {
+        const sceneTitle = `Cena ${scene.number}: ${scene.title}`;
+        const cameraText = `Enquadramento: ${scene.camera}`;
+        
+        const actionLines = doc.splitTextToSize(`Ação: ${scene.action}`, contentWidth);
+        const dialogueLines = doc.splitTextToSize(`Diálogo: "${scene.dialogue}"`, contentWidth);
+        const promptLines = doc.splitTextToSize(`Prompt Visual: ${scene.visualPrompt}`, contentWidth);
+        
+        const imageSize = 65; // A4 width is 180 printable, image is e.g. 115mm x 65mm (16:9 approx)
+        const textHeight = (actionLines.length + dialogueLines.length + promptLines.length) * 5 + 12;
+        const sceneNeededHeight = 10 + (scene.imageData ? imageSize : 25) + textHeight + 15;
+        
+        ensureSpace(sceneNeededHeight);
+
+        // Scene Divider Line
+        doc.setDrawColor(241, 245, 249); // slate-100
+        doc.setLineWidth(0.8);
+        doc.line(marginX, currentY, pageWidth - marginX, currentY);
+        currentY += 6;
+
+        // Title & Camera tag
+        doc.setFont('Helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text(sceneTitle, marginX, currentY);
+        
+        doc.setFont('Helvetica', 'italic');
+        doc.setFontSize(9);
+        doc.setTextColor(8, 145, 178); // cyan-600
+        doc.text(cameraText, pageWidth - marginX, currentY, { align: 'right' });
+        currentY += 6;
+
+        // Render Image frame
+        if (scene.imageData) {
+          try {
+            let base64 = scene.imageData;
+            if (!base64.startsWith('data:')) {
+              base64 = `data:image/jpeg;base64,${base64}`;
+            }
+            
+            // Centered 16:9 image
+            const imgW = 120;
+            const imgH = 67.5; // (120 * 9 / 16)
+            const imgX = marginX + (contentWidth - imgW) / 2;
+            
+            doc.setFillColor(241, 245, 249);
+            doc.rect(imgX - 0.5, currentY - 0.5, imgW + 1, imgH + 1, 'F');
+            
+            doc.addImage(base64, 'JPEG', imgX, currentY, imgW, imgH);
+            currentY += imgH + 6;
+          } catch (imgError) {
+            console.error("PDF image embedding failed:", imgError);
+            doc.setFillColor(241, 245, 249);
+            doc.rect(marginX, currentY, contentWidth, 20, 'F');
+            doc.setFont('Helvetica', 'bold');
+            doc.setFontSize(9);
+            doc.setTextColor(148, 163, 184);
+            doc.text("Frame Ilustrado (Erro de renderização do PDF)", marginX + 10, currentY + 11);
+            currentY += 25;
+          }
+        } else {
+          // Unillustrated box
+          doc.setFillColor(248, 250, 252);
+          doc.setDrawColor(226, 232, 240);
+          doc.setLineWidth(0.4);
+          doc.rect(marginX, currentY, contentWidth, 20, 'FD');
+          
+          doc.setFont('Helvetica', 'normal');
+          doc.setFontSize(9);
+          doc.setTextColor(148, 163, 184);
+          doc.text("Frame não ilustrado", marginX + contentWidth / 2, currentY + 11, { align: 'center' });
+          currentY += 25;
+        }
+
+        // Texts (Action, Dialogue, Prompt)
+        doc.setFont('Helvetica', 'normal');
+        doc.setFontSize(9.5);
+        doc.setTextColor(51, 65, 85); // slate-700
+        
+        // Action
+        actionLines.forEach((line: string, lIdx: number) => {
+          if (lIdx === 0) {
+            doc.setFont('Helvetica', 'bold');
+            doc.setTextColor(71, 85, 105); // slate-600
+            doc.text("Ação: ", marginX, currentY);
+            doc.setFont('Helvetica', 'normal');
+            doc.setTextColor(51, 65, 85);
+            doc.text(line.replace(/^Ação:\s*/i, ''), marginX + 11, currentY);
+          } else {
+            doc.text(line, marginX, currentY);
+          }
+          currentY += 4.5;
+        });
+        currentY += 1.5;
+
+        // Dialogue
+        dialogueLines.forEach((line: string, lIdx: number) => {
+          if (lIdx === 0) {
+            doc.setFont('Helvetica', 'bold');
+            doc.setTextColor(71, 85, 105);
+            doc.text("Diálogo: ", marginX, currentY);
+            doc.setFont('Helvetica', 'oblique');
+            doc.setTextColor(2, 132, 199); // sky-600
+            doc.text(line.replace(/^Diálogo:\s*/i, ''), marginX + 15, currentY);
+          } else {
+            doc.setFont('Helvetica', 'oblique');
+            doc.setTextColor(2, 132, 199);
+            doc.text(line, marginX, currentY);
+          }
+          currentY += 4.5;
+        });
+        currentY += 1.5;
+
+        // Prompt
+        doc.setFont('Helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184); // slate-400
+        promptLines.forEach((line: string) => {
+          doc.text(line, marginX, currentY);
+          currentY += 3.8;
+        });
+
+        currentY += 6;
+      }
+
+      // Footer stamp
+      ensureSpace(12);
+      doc.setFont('Helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Documento gerado por StoryCreator • ${new Date().toLocaleDateString('pt-BR')}`, marginX, currentY + 5);
+
+      const filename = `storyboard-${storyboard.title.replace(/\s+/g, '-').toLowerCase()}.pdf`;
+      doc.save(filename);
+    } catch (err) {
+      console.error("Incapaz de gerar o PDF:", err);
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
+  // Google Drive Upload Handler for script (.txt)
+  const handleSendScriptToDrive = async () => {
+    if (!googleToken) return;
+    setIsUploadingToDrive(true);
+    setDriveSuccessMsg(null);
+    setDriveErrorMsg(null);
+    
+    try {
+      const folderId = await getOrCreateFolder(googleToken);
+      await uploadScriptToDrive(googleToken, storyboard, folderId);
+      setDriveSuccessMsg('Roteiro salvo com sucesso!');
+      setDriveFileUrl(`https://drive.google.com/drive/u/0/folders/${folderId}`);
+    } catch (err: any) {
+      console.error(err);
+      setDriveErrorMsg('Erro ao exportar arquivo para o seu Drive.');
+    } finally {
+      setIsUploadingToDrive(false);
+    }
+  };
+
+  // Google Drive Upload Handler for illustrated presentation (.html)
+  const handleSendHtmlToDrive = async () => {
+    if (!googleToken) return;
+    setIsUploadingToDrive(true);
+    setDriveSuccessMsg(null);
+    setDriveErrorMsg(null);
+    
+    try {
+      const folderId = await getOrCreateFolder(googleToken);
+      await uploadHtmlReportToDrive(googleToken, storyboard, folderId);
+      setDriveSuccessMsg('Storyboard HTML salvo com sucesso!');
+      setDriveFileUrl(`https://drive.google.com/drive/u/0/folders/${folderId}`);
+    } catch (err: any) {
+      console.error(err);
+      setDriveErrorMsg('Erro ao exportar storyboard HTML para o seu Drive.');
+    } finally {
+      setIsUploadingToDrive(false);
+    }
+  };
+
   const countGenerated = storyboard.scenes.filter(s => s.imageData).length;
   const isComplete = countGenerated === storyboard.scenes.length;
 
@@ -199,6 +510,111 @@ const StoryboardDisplay: React.FC<StoryboardDisplayProps> = ({ storyboard, onUpd
             <FileText className="w-4 h-4 text-slate-500 dark:text-slate-400" />
             <span>Baixar Roteiro</span>
           </button>
+
+          <button
+            onClick={handleExportPDF}
+            disabled={isExportingPDF}
+            className="px-4 py-3 bg-gradient-to-r from-cyan-600 to-cyan-700 hover:from-cyan-500 hover:to-cyan-600 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md hover:shadow-cyan-500/10 transition-all border border-cyan-500/20 disabled:opacity-50"
+            title="Exportar Storyboard Completo como PDF Organizado"
+          >
+            {isExportingPDF ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            <span>{isExportingPDF ? 'Gerando PDF...' : 'Exportar PDF'}</span>
+          </button>
+
+          {/* Google Drive Status & Uploads */}
+          {!googleToken ? (
+            <button
+              onClick={onGoogleLogin}
+              disabled={isLoggingInGoogle}
+              className="px-4 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-xl text-sm font-bold flex items-center justify-center gap-2 border border-slate-200 dark:border-white/10 transition-all"
+              title="Conectar ao Google Drive para exportação em nuvem"
+            >
+              <Cloud className="w-4 h-4 text-cyan-500" />
+              <span>{isLoggingInGoogle ? 'Conectando...' : 'Conectar Drive'}</span>
+            </button>
+          ) : (
+            <div className="relative">
+              <button
+                onClick={() => setShowDriveOptions(!showDriveOptions)}
+                className="px-4 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md transition-all border border-emerald-500/20"
+                title="Salvar ou Exportar diretamente para o seu Google Drive"
+              >
+                <Cloud className="w-4 h-4 text-white" />
+                <span>Salvar no Drive</span>
+              </button>
+              
+              {showDriveOptions && (
+                <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-30 p-3 animate-in fade-in zoom-in-95 duration-150 text-left">
+                  <div className="px-1 py-1 border-b border-slate-100 dark:border-white/5 mb-2 flex justify-between items-center">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider font-mono">Exportadores Drive</span>
+                    <span className="text-[8px] font-mono text-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/10">Ativo</span>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <button
+                      onClick={handleSendScriptToDrive}
+                      disabled={isUploadingToDrive}
+                      className="w-full text-left px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all flex items-center gap-2.5 disabled:opacity-50"
+                    >
+                      <FileText className="w-4 h-4 text-cyan-500 shrink-0" />
+                      <div className="flex flex-col">
+                        <span className="text-slate-800 dark:text-slate-200 leading-normal">Texto do Roteiro (.txt)</span>
+                        <span className="text-[9px] text-slate-400 font-light font-mono">Formato roteiro padrão</span>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={handleSendHtmlToDrive}
+                      disabled={isUploadingToDrive}
+                      className="w-full text-left px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all flex items-center gap-2.5 disabled:opacity-50"
+                    >
+                      <Film className="w-4 h-4 text-purple-500 shrink-0" />
+                      <div className="flex flex-col">
+                        <span className="text-slate-800 dark:text-slate-200 leading-normal">Storyboard Interativo (.html)</span>
+                        <span className="text-[9px] text-slate-400 font-light font-mono">Showcase com ilustrações</span>
+                      </div>
+                    </button>
+                  </div>
+
+                  {isUploadingToDrive && (
+                    <div className="mt-3 text-center py-2 flex items-center justify-center gap-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-500" />
+                      <span className="text-[10px] text-slate-400 font-mono">Salvando arquivo...</span>
+                    </div>
+                  )}
+                  
+                  {driveSuccessMsg && (
+                    <div className="mt-3 p-2 bg-gradient-to-br from-green-500/10 to-emerald-500/5 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800/40 rounded-xl text-[10px] font-medium text-center space-y-1">
+                      <p className="flex items-center gap-1.5 justify-center">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                        {driveSuccessMsg}
+                      </p>
+                      {driveFileUrl && (
+                        <a 
+                          href={driveFileUrl} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          className="block text-center text-[10px] text-cyan-600 dark:text-cyan-400 underline font-semibold font-mono hover:text-cyan-550"
+                        >
+                          Abrir no Google Drive ↗
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {driveErrorMsg && (
+                    <div className="mt-2.5 p-2 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800/40 rounded-xl text-[10px] text-center font-semibold">
+                      {driveErrorMsg}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <button
             onClick={() => setShowTrailer(true)}
